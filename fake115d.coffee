@@ -1,7 +1,7 @@
 `// ==UserScript==
 // @name         fake 115Browser download
 // @namespace    http://github.com/kkHAIKE/fake115
-// @version      1.0.2
+// @version      1.0.3
 // @description  伪装115浏览器下载
 // @author       kkhaike
 // @match        *://115.com/*
@@ -11,23 +11,97 @@
 // @grant        GM_log
 // @grant        GM_setClipboard
 // @connect      proapi.115.com
-// @require      https://rawgit.com/kkHAIKE/jsencrypt/balabala/bin/jsencrypt.js
+// @require      https://peterolson.github.io/BigInteger.js/BigInteger.min.js
 // @require      https://cdn.bootcdn.net/ajax/libs/blueimp-md5/2.18.0/js/md5.min.js
 // @run-at       document-start
 // ==/UserScript==
 (function() {
     'use strict'`
 
+getCryptoObject = ->
+  return globalThis.crypto if typeof globalThis isnt 'undefined' and globalThis.crypto?.getRandomValues?
+  null
+
+cryptoObj = getCryptoObject()
+randomByteBuffer = new Uint8Array 1
+
+getRandomNonZeroByte = ->
+  if cryptoObj?
+    loop
+      cryptoObj.getRandomValues randomByteBuffer
+      return randomByteBuffer[0] if randomByteBuffer[0] isnt 0
+  loop
+    value = Math.floor Math.random() * 0x100
+    return value if value isnt 0
+
+class MyRsa
+  constructor: ->
+    @n = bigInt '8686980c0f5a24c4b9d43020cd2c22703ff3f450756529058b1cf88f09b8602136477198a6e2683149659bd122c33592fdb5ad47944ad1ea4d36c6b172aad6338c3bb6ac6227502d010993ac967d1aef00f0c8e038de2e4d3bc2ec368af2e9f10a6f1eda4f7262f136420c07c331b871bf139f74f3010e3c4fe57df3afb71683', 16
+    @e = bigInt '10001', 16
+
+  a2hex: (byteArray) ->
+    (('0' + b.toString(16)).slice(-2) for b in byteArray).join ''
+
+  hex2a: (hex) ->
+    codes = []
+    i = 0
+    while i < hex.length
+      codes.push parseInt(hex.substr(i, 2), 16)
+      i += 2
+    String.fromCharCode codes...
+
+  pkcs1pad2: (s, n) ->
+    return null if n < s.length + 11
+    ba = []
+    i = s.length - 1
+    while i >= 0 and n > 0
+      ba[--n] = s.charCodeAt(i--)
+    ba[--n] = 0
+    while n > 2
+      ba[--n] = getRandomNonZeroByte()
+    ba[--n] = 2
+    ba[--n] = 0
+    c = @a2hex ba
+    bigInt c, 16
+
+  pkcs1unpad2: (a) ->
+    b = a.toString 16
+    b = '0' + b if b.length % 2 isnt 0
+    c = @hex2a b
+    i = 1
+    while c.charCodeAt(i) isnt 0
+      i++
+    c.slice i + 1
+
+  encrypt: (text) ->
+    m = @pkcs1pad2 text, 0x80
+    c = m.modPow @e, @n
+    h = c.toString 16
+    while h.length < 0x80 * 2
+      h = '0' + h
+    h
+
+  decrypt: (text) ->
+    a = bigInt @a2hex(stringToBytes text), 16
+    c = a.modPow @e, @n
+    @pkcs1unpad2 c
+
+new_rsa = new MyRsa()
+
+activeDownloadDialog = null
+downloadDialogKeyHandler = null
+copyTimer = null
+
 g_kts = [
-    0xF0, 0xE5, 0x69, 0xAE, 0xBF, 0xDC, 0xBF, 0x5A, 0x1A, 0x45, 0xE8, 0xBE, 0x7D, 0xA6, 0x73, 0x88,
-    0xDE, 0x8F, 0xE7, 0xC4, 0x45, 0xDA, 0x86, 0x94, 0x9B, 0x69, 0x92, 0x0B, 0x6A, 0xB8, 0xF1, 0x7A,
-    0x38, 0x06, 0x3C, 0x95, 0x26, 0x6D, 0x2C, 0x56, 0x00, 0x70, 0x56, 0x9C, 0x36, 0x38, 0x62, 0x76,
-    0x2F, 0x9B, 0x5F, 0x0F, 0xF2, 0xFE, 0xFD, 0x2D, 0x70, 0x9C, 0x86, 0x44, 0x8F, 0x3D, 0x14, 0x27,
-    0x71, 0x93, 0x8A, 0xE4, 0x0E, 0xC1, 0x48, 0xAE, 0xDC, 0x34, 0x7F, 0xCF, 0xFE, 0xB2, 0x7F, 0xF6,
-    0x55, 0x9A, 0x46, 0xC8, 0xEB, 0x37, 0x77, 0xA4, 0xE0, 0x6B, 0x72, 0x93, 0x7E, 0x51, 0xCB, 0xF1,
-    0x37, 0xEF, 0xAD, 0x2A, 0xDE, 0xEE, 0xF9, 0xC9, 0x39, 0x6B, 0x32, 0xA1, 0xBA, 0x35, 0xB1, 0xB8,
-    0xBE, 0xDA, 0x78, 0x73, 0xF8, 0x20, 0xD5, 0x27, 0x04, 0x5A, 0x6F, 0xFD, 0x5E, 0x72, 0x39, 0xCF,
-    0x3B, 0x9C, 0x2B, 0x57, 0x5C, 0xF9, 0x7C, 0x4B, 0x7B, 0xD2, 0x12, 0x66, 0xCC, 0x77, 0x09, 0xA6
+    240, 229, 105, 174, 191, 220, 191, 138, 26, 69, 232, 190, 125, 166, 115, 184,
+    222, 143, 231, 196, 69, 218, 134, 196, 155, 100, 139, 20, 106, 180, 241, 170,
+    56, 1, 53, 158, 38, 105, 44, 134, 0, 107, 79, 165, 54, 52, 98, 166,
+    42, 150, 104, 24, 242, 74, 253, 189, 107, 151, 143, 77, 143, 137, 19, 183,
+    108, 142, 147, 237, 14, 13, 72, 62, 215, 47, 136, 216, 254, 254, 126, 134,
+    80, 149, 79, 209, 235, 131, 38, 52, 219, 102, 123, 156, 126, 157, 122, 129,
+    50, 234, 182, 51, 222, 58, 169, 89, 52, 102, 59, 170, 186, 129, 96, 72,
+    185, 213, 129, 156, 248, 108, 132, 119, 255, 84, 120, 38, 95, 190, 232, 30,
+    54, 159, 52, 128, 92, 69, 44, 155, 118, 213, 27, 143, 204, 195, 184, 245
 ]
 
 g_key_s = [
@@ -35,7 +109,7 @@ g_key_s = [
 ]
 
 g_key_l = [
-  0x42, 0xDA, 0x13, 0xBA, 0x78, 0x76, 0x8D, 0x37, 0xE8, 0xEE, 0x04, 0x91
+  120, 6, 173, 76, 51, 134, 93, 24, 76, 1, 63, 70
 ]
 
 m115_getkey = (length, key) ->
@@ -43,7 +117,7 @@ m115_getkey = (length, key) ->
     return (((key[i] + g_kts[length * i]) & 0xff) ^ g_kts[length * (length - 1 - i)] for i in [0...length])
   if length is 12
     return g_key_l[..]
-  return g_key_s[..]
+  g_key_s[..]
 
 xor115_enc = (src, srclen, key, keylen) ->
   mod4 = srclen % 4
@@ -53,89 +127,409 @@ xor115_enc = (src, srclen, key, keylen) ->
       ret.push src[i] ^ key[i % keylen]
   for i in [mod4...srclen]
     ret.push src[i] ^ key[(i - mod4) % keylen]
-  return ret
+  ret
 
 m115_sym_encode = (src, srclen, key1, key2) ->
   k1 = m115_getkey 4, key1
   k2 = m115_getkey 12, key2
   ret = xor115_enc src, srclen, k1, 4
   ret.reverse()
-  ret = xor115_enc ret, srclen, k2, 12
-  return ret
+  xor115_enc ret, srclen, k2, 12
 
 m115_sym_decode = (src, srclen, key1, key2) ->
   k1 = m115_getkey 4, key1
   k2 = m115_getkey 12, key2
   ret = xor115_enc src, srclen, k2, 12
   ret.reverse()
-  ret = xor115_enc ret, srclen, k1, 4
-  return ret
+  xor115_enc ret, srclen, k1, 4
 
 stringToBytes = (s) ->
   ret = []
   for i in [0...s.length]
     ret.push s.charCodeAt i
-  return ret
+  ret
 
 bytesToString = (b) ->
   ret = ''
   for i in b
     ret += String.fromCharCode i
-  return ret
-
-prsa = new JSEncrypt()
-prsa.setPublicKey """
-  -----BEGIN RSA PUBLIC KEY-----
-  MIGfMA0GCSqGSIb3DQEBAQUAA4GNADCBiQKBgQDR3rWmeYnRClwLBB0Rq0dlm8Mr
-  PmWpL5I23SzCFAoNpJX6Dn74dfb6y02YH15eO6XmeBHdc7ekEFJUIi+swganTokR
-  IVRRr/z16/3oh7ya22dcAqg191y+d6YDr4IGg/Q5587UKJMj35yQVXaeFXmLlFPo
-  kFiz4uPxhrB7BGqZbQIDAQAB
-  -----END RSA PUBLIC KEY-----
-  """
-srsa = new JSEncrypt()
-srsa.setPrivateKey """
-  -----BEGIN RSA PRIVATE KEY-----
-  MIICXAIBAAKBgQCMgUJLwWb0kYdW6feyLvqgNHmwgeYYlocst8UckQ1+waTOKHFC
-  TVyRSb1eCKJZWaGa08mB5lEu/asruNo/HjFcKUvRF6n7nYzo5jO0li4IfGKdxso6
-  FJIUtAke8rA2PLOubH7nAjd/BV7TzZP2w0IlanZVS76n8gNDe75l8tonQQIDAQAB
-  AoGANwTasA2Awl5GT/t4WhbZX2iNClgjgRdYwWMI1aHbVfqADZZ6m0rt55qng63/
-  3NsjVByAuNQ2kB8XKxzMoZCyJNvnd78YuW3Zowqs6HgDUHk6T5CmRad0fvaVYi6t
-  viOkxtiPIuh4QrQ7NUhsLRtbH6d9s1KLCRDKhO23pGr9vtECQQDpjKYssF+kq9iy
-  A9WvXRjbY9+ca27YfarD9WVzWS2rFg8MsCbvCo9ebXcmju44QhCghQFIVXuebQ7Q
-  pydvqF0lAkEAmgLnib1XonYOxjVJM2jqy5zEGe6vzg8aSwKCYec14iiJKmEYcP4z
-  DSRms43hnQsp8M2ynjnsYCjyiegg+AZ87QJANuwwmAnSNDOFfjeQpPDLy6wtBeft
-  5VOIORUYiovKRZWmbGFwhn6BQL+VaafrNaezqUweBRi1PYiAF2l3yLZbUQJAf/nN
-  4Hz/pzYmzLlWnGugP5WCtnHKkJWoKZBqO2RfOBCq+hY4sxvn3BHVbXqGcXLnZPvo
-  YuaK7tTXxZSoYLEzeQJBAL8Mt3AkF1Gci5HOug6jT4s4Z+qDDrUXo9BlTwSWP90v
-  wlHF+mkTJpKd5Wacef0vV+xumqNorvLpIXWKwxNaoHM=
-  -----END RSA PRIVATE KEY-----
-  """
+  ret
 
 m115_asym_encode = (src, srclen) ->
   m = 128 - 11
   ret = ''
   for i in [0...(srclen + m - 1) // m]
-    ret += window.atob prsa.encrypt bytesToString src[i * m...Math.min((i + 1) * m, srclen)]
-  return window.btoa ret
+    ret += new_rsa.encrypt bytesToString src[i * m...Math.min((i + 1) * m, srclen)]
+  window.btoa new_rsa.hex2a ret
 
 m115_asym_decode = (src, srclen) ->
   m = 128
   ret = ''
   for i in [0...(srclen + m - 1) // m]
-    ret += srsa.decrypt window.btoa bytesToString src[i * m...Math.min((i + 1) * m, srclen)]
-  return stringToBytes ret
+    ret += new_rsa.decrypt bytesToString src[i * m...Math.min((i + 1) * m, srclen)]
+  stringToBytes ret
 
 m115_encode = (src, tm) ->
   key = stringToBytes md5 "!@###@##{tm}DFDR@#@#"
   tmp = stringToBytes src
   tmp = m115_sym_encode tmp, tmp.length, key, null
   tmp = key[0...16].concat tmp
-  return {data:m115_asym_encode(tmp, tmp.length), key}
+  {data:m115_asym_encode(tmp, tmp.length), key}
 
 m115_decode = (src, key) ->
   tmp = stringToBytes window.atob src
   tmp = m115_asym_decode tmp, tmp.length
-  return bytesToString m115_sym_decode tmp[16..], tmp.length - 16, key, tmp[0...16]
+  bytesToString m115_sym_decode tmp[16..], tmp.length - 16, key, tmp[0...16]
+
+buildDownloadUrlsText = (rs) ->
+  (f.url.url for f in rs).join '\n'
+
+ensureDownloadDialogStyle = ->
+  return if document.getElementById 'fake115d-download-style'
+  parent = document.head or document.body
+  return unless parent?
+
+  style = document.createElement 'style'
+  style.id = 'fake115d-download-style'
+  style.textContent = """
+#fake115d-download-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 2147483647;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 24px;
+  background: rgba(15, 23, 42, 0.42);
+  backdrop-filter: blur(6px);
+}
+#fake115d-download-panel {
+  width: min(720px, 100%);
+  max-height: min(80vh, 760px);
+  overflow: hidden;
+  border-radius: 24px;
+  border: 1px solid rgba(148, 163, 184, 0.28);
+  background: linear-gradient(180deg, rgba(255, 255, 255, 0.98), rgba(248, 250, 252, 0.98));
+  box-shadow: 0 24px 70px rgba(15, 23, 42, 0.22);
+  color: #0f172a;
+}
+.fake115d-download-header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 22px 24px 18px;
+  border-bottom: 1px solid rgba(226, 232, 240, 0.95);
+}
+.fake115d-download-title {
+  margin: 0;
+  font-size: 20px;
+  line-height: 1.2;
+  font-weight: 700;
+  color: #0f172a;
+}
+.fake115d-download-subtitle {
+  margin: 6px 0 0;
+  font-size: 13px;
+  color: #64748b;
+}
+.fake115d-download-close {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 36px;
+  height: 36px;
+  border: 0;
+  border-radius: 999px;
+  background: rgba(148, 163, 184, 0.14);
+  color: #475569;
+  font-size: 22px;
+  line-height: 1;
+  cursor: pointer;
+}
+.fake115d-download-close:hover {
+  background: rgba(148, 163, 184, 0.24);
+}
+.fake115d-download-body {
+  padding: 20px 24px 24px;
+}
+.fake115d-download-toolbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 16px;
+}
+.fake115d-download-copy {
+  display: inline-flex;
+  flex: none;
+  align-items: center;
+  justify-content: center;
+  min-height: 40px;
+  min-width: 124px;
+  padding: 0 28px;
+  border: 0;
+  border-radius: 999px;
+  background: linear-gradient(180deg, #1677ff, #0f6ce6);
+  color: #fff;
+  font-size: 13px;
+  font-weight: 700;
+  line-height: 1;
+  letter-spacing: 0;
+  white-space: nowrap;
+  cursor: pointer;
+  box-shadow: 0 10px 24px rgba(22, 119, 255, 0.22);
+}
+.fake115d-download-copy:hover {
+  filter: brightness(1.04);
+}
+.fake115d-download-copy.is-copied {
+  background: linear-gradient(180deg, #10b981, #059669);
+  box-shadow: 0 10px 24px rgba(16, 185, 129, 0.22);
+}
+.fake115d-download-count {
+  font-size: 13px;
+  color: #64748b;
+}
+.fake115d-download-list {
+  overflow: auto;
+  max-height: min(56vh, 520px);
+  padding-right: 4px;
+}
+.fake115d-download-item + .fake115d-download-item {
+  margin-top: 10px;
+}
+.fake115d-download-link {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 14px;
+  padding: 14px 16px;
+  border: 1px solid rgba(226, 232, 240, 0.96);
+  border-radius: 18px;
+  background: rgba(255, 255, 255, 0.96);
+  text-decoration: none;
+  transition: transform .16s ease, box-shadow .16s ease, border-color .16s ease, background-color .16s ease;
+}
+.fake115d-download-link:hover {
+  transform: translateY(-1px);
+  border-color: rgba(96, 165, 250, 0.7);
+  background: #fff;
+  box-shadow: 0 14px 28px rgba(15, 23, 42, 0.08);
+}
+.fake115d-download-file {
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+.fake115d-download-badge {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex: none;
+  min-width: 46px;
+  height: 32px;
+  padding: 0 10px;
+  border-radius: 12px;
+  background: linear-gradient(180deg, #e0f2fe, #eff6ff);
+  color: #0369a1;
+  font-size: 12px;
+  font-weight: 800;
+  letter-spacing: 0.03em;
+  text-transform: uppercase;
+}
+.fake115d-download-name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: #0f172a;
+  font-size: 14px;
+  font-weight: 600;
+}
+.fake115d-download-hint {
+  flex: none;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 72px;
+  height: 30px;
+  padding: 0 12px;
+  border-radius: 999px;
+  background: rgba(37, 99, 235, 0.08);
+  color: #2563eb;
+  font-size: 12px;
+  font-weight: 700;
+}
+@media (max-width: 640px) {
+  #fake115d-download-overlay {
+    padding: 12px;
+  }
+  #fake115d-download-panel {
+    width: 100%;
+    max-height: 88vh;
+    border-radius: 20px;
+  }
+  .fake115d-download-header,
+  .fake115d-download-body {
+    padding-left: 16px;
+    padding-right: 16px;
+  }
+  .fake115d-download-link {
+    align-items: flex-start;
+  }
+  .fake115d-download-hint {
+    min-width: 58px;
+  }
+}
+"""
+  parent.appendChild style
+
+closeDownloadDialog = ->
+  clearTimeout copyTimer if copyTimer?
+  copyTimer = null
+  if downloadDialogKeyHandler?
+    window.removeEventListener 'keydown', downloadDialogKeyHandler
+    downloadDialogKeyHandler = null
+  if activeDownloadDialog?.parentNode?
+    activeDownloadDialog.parentNode.removeChild activeDownloadDialog
+  activeDownloadDialog = null
+
+showDownloadDialog = (rs) ->
+  urlsText = buildDownloadUrlsText rs
+
+  unless document?.body?
+    return alert urlsText
+
+  ensureDownloadDialogStyle()
+  closeDownloadDialog()
+
+  overlay = document.createElement 'div'
+  overlay.id = 'fake115d-download-overlay'
+
+  panel = document.createElement 'section'
+  panel.id = 'fake115d-download-panel'
+
+  header = document.createElement 'div'
+  header.className = 'fake115d-download-header'
+
+  title = document.createElement 'h3'
+  title.className = 'fake115d-download-title'
+  title.textContent = '下载链接'
+
+  subtitle = document.createElement 'p'
+  subtitle.className = 'fake115d-download-subtitle'
+  subtitle.textContent = "#{rs.length} 个文件，单击任意一项即可下载单个文件"
+
+  titleBox = document.createElement 'div'
+  titleBox.appendChild title
+  titleBox.appendChild subtitle
+
+  closeBtn = document.createElement 'button'
+  closeBtn.type = 'button'
+  closeBtn.className = 'fake115d-download-close'
+  closeBtn.textContent = '×'
+  closeBtn.setAttribute 'aria-label', '关闭'
+  closeBtn.addEventListener 'click', closeDownloadDialog
+
+  header.appendChild titleBox
+  header.appendChild closeBtn
+
+  body = document.createElement 'div'
+  body.className = 'fake115d-download-body'
+
+  toolbar = document.createElement 'div'
+  toolbar.className = 'fake115d-download-toolbar'
+
+  count = document.createElement 'span'
+  count.className = 'fake115d-download-count'
+  defaultCountText = "已解析 #{rs.length} 个真实下载链接"
+  count.textContent = defaultCountText
+
+  defaultCopyText = '复制所有链接'
+  copyBtn = document.createElement 'button'
+  copyBtn.type = 'button'
+  copyBtn.className = 'fake115d-download-copy'
+  copyBtn.textContent = defaultCopyText
+  copyBtn.addEventListener 'click', ->
+    clearTimeout copyTimer if copyTimer?
+    copyBtn.classList.add 'is-copied'
+    copyBtn.textContent = '已复制'
+    count.textContent = '下载链接已复制到剪贴板'
+    GM_setClipboard urlsText
+    copyTimer = setTimeout ->
+      copyBtn.classList.remove 'is-copied'
+      copyBtn.textContent = defaultCopyText
+      count.textContent = defaultCountText
+    , 1600
+
+  toolbar.appendChild copyBtn
+  toolbar.appendChild count
+
+  list = document.createElement 'div'
+  list.className = 'fake115d-download-list'
+
+  for f in rs
+    item = document.createElement 'div'
+    item.className = 'fake115d-download-item'
+
+    link = document.createElement 'a'
+    link.className = 'fake115d-download-link'
+    link.href = f.url.url
+    link.target = '_blank'
+    link.rel = 'noopener'
+    do (f) ->
+      link.addEventListener 'click', (event) ->
+        event.preventDefault?()
+        startSingleFileDownload f
+
+    fileBox = document.createElement 'div'
+    fileBox.className = 'fake115d-download-file'
+
+    badge = document.createElement 'span'
+    badge.className = 'fake115d-download-badge'
+    parts = f.file_name.split '.'
+    badge.textContent = if parts.length > 1 then parts.pop().slice(0, 4) else 'FILE'
+
+    name = document.createElement 'span'
+    name.className = 'fake115d-download-name'
+    name.textContent = f.file_name
+
+    hint = document.createElement 'span'
+    hint.className = 'fake115d-download-hint'
+    hint.textContent = '下载'
+
+    fileBox.appendChild badge
+    fileBox.appendChild name
+    link.appendChild fileBox
+    link.appendChild hint
+    item.appendChild link
+    list.appendChild item
+
+  body.appendChild toolbar
+  body.appendChild list
+  panel.appendChild header
+  panel.appendChild body
+  overlay.appendChild panel
+
+  overlay.addEventListener 'click', (event) ->
+    closeDownloadDialog() if event.target is overlay
+
+  downloadDialogKeyHandler = (event) ->
+    closeDownloadDialog() if event.key is 'Escape'
+  window.addEventListener 'keydown', downloadDialogKeyHandler
+
+  document.body.appendChild overlay
+  activeDownloadDialog = overlay
+
+startSingleFileDownload = (file) ->
+  link = document.createElement 'a'
+  link.href = file.url.url
+  link.download = file.file_name
+  link.style.display = 'none'
+  document.body.appendChild link
+  link.click()
+  link.parentNode.removeChild link
 
 CreateDownloadTask_ = (f, cb) ->
   tmus = (new Date()).getTime()
@@ -160,7 +554,9 @@ CreateDownloadTask_ = (f, cb) ->
 
 CreateDownloadTask = (o) ->
   rs = []
-  n = 0
+  files = (f for f in o.list when not f.is_dir)
+  n = files.length
+
   cb = (r) ->
     for x of r
       rs.push r[x]
@@ -168,31 +564,12 @@ CreateDownloadTask = (o) ->
 
     if rs.length is n
       GM_log rs
+      if rs.length is 1
+        return startSingleFileDownload rs[0]
+      showDownloadDialog rs
 
-      con = $ '<ul/>'
-      if n > 1
-        btn = $ '<button>复制所有链接</button>'
-        con.append '<li/>'
-        con.children(':first').append btn
-        btn.click () ->
-          all = ''
-          for f in rs
-            all += "#{f.url.url}\n"
-          GM_setClipboard all
-
-      for f in rs
-        con.append "<li><a href='#{f.url.url}'>#{f.file_name}</a></li>"
-
-      win = new Core.DialogBase
-        title: '文件下载'
-        content: con
-        width: 530
-      win.Open null
-
-  for f in o.list
-    if not f.is_dir
-      n++
-      CreateDownloadTask_ f, cb
+  for f in files
+    CreateDownloadTask_ f, cb
 
 browserInterface = unsafeWindow.browserInterface ? {}
 browserInterface.CreateDownloadTask = (s) ->
